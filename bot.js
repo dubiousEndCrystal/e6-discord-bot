@@ -1,129 +1,232 @@
-// bot.js
-require('./server.js');
-const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, REST } = require('discord.js');
+const {
+    Client,
+    GatewayIntentBits,
+    SlashCommandBuilder,
+    Routes,
+    REST,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle
+} = require('discord.js');
+
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
-//client
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-//reg
+//command
 const commands = [
     new SlashCommandBuilder()
         .setName('search')
-        .setDescription('Search images from e621')
+        .setDescription('Advanced e621 search')
         .addStringOption(option =>
             option.setName('query')
-                .setDescription('Tags to search for, use -tag to exclude')
+                .setDescription('tags, -exclude, >score, fav>100, width>1000')
                 .setRequired(true))
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
-    try {
-        console.log('Registering slash command...');
-        await rest.put(
-            Routes.applicationCommands(CLIENT_ID),
-            { body: commands }
-        );
-        console.log('Slash command registered!');
-    } catch (err) {
-        console.error(err);
-    }
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
 })();
 
-//exclude
+//excludes
 const DEFAULT_EXCLUDES = [
-    // minors / baby stuff
     'baby','babies','diaper','loli','shota','cub','minor','underage',
     'child','preteen','infant','kid','juvenile','young','elementary',
     'schoolgirl','schoolboy','babyfur',
-    
-    // AI-generated / bot stuff
     'ai','generated','synthetic',
-
-    // gore / extreme stuff
-    'gore','blood','violence','decapitation','disembowelment','brutal',
+    'gore','blood','violence','decapitation','disembowelment',
     'mutilation','torture','death','corpse'
 ];
 
-//ready
+// Ready
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 });
 
-//cmd
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
+// Query parser
+function parseQuery(query) {
+    const parts = query.trim().split(/\s+/);
 
-    if (interaction.commandName === 'search') {
-        const userQuery = interaction.options.getString('query').trim();
+    let include = [];
+    let exclude = [...DEFAULT_EXCLUDES];
 
-        // split user input into included and excluded tags
-        const parts = userQuery.split(/\s+/);
-        let includeTags = [];
-        let excludeTags = [...DEFAULT_EXCLUDES];
+    let filters = {
+        score: null,
+        fav: null,
+        width: null,
+        height: null
+    };
 
-        for (const part of parts) {
-            if (part.startsWith('-') && part.length > 1) {
-                excludeTags.push(part.slice(1));
-            } else {
-                includeTags.push(part);
-            }
+    for (const part of parts) {
+        if (part.startsWith('-')) {
+            exclude.push(part.slice(1));
         }
 
-        // convert
-        const includeString = includeTags.join('+');
-        const excludeString = excludeTags.map(tag => `-${tag}`).join('+');
+        else if (/^(>=|<=|>|<)\d+$/.test(part)) {
+            filters.score = {
+                op: part.match(/^(>=|<=|>|<)/)[0],
+                val: parseInt(part.replace(/^(>=|<=|>|<)/, ''))
+            };
+        }
 
-        const filteredQuery = `${includeString}+status:active+${excludeString}`;
-        const url = `https://e621.net/posts?tags=${filteredQuery}`;
+        else if (/^fav(>=|<=|>|<)\d+$/.test(part)) {
+            const op = part.match(/(>=|<=|>|<)/)[0];
+            const val = parseInt(part.replace(/fav(>=|<=|>|<)/, ''));
+            filters.fav = { op, val };
+        }
 
-        await interaction.reply('Searching... Gimme a second...');
+        else if (/^width(>=|<=|>|<)\d+$/.test(part)) {
+            const op = part.match(/(>=|<=|>|<)/)[0];
+            const val = parseInt(part.replace(/width(>=|<=|>|<)/, ''));
+            filters.width = { op, val };
+        }
+
+        else if (/^height(>=|<=|>|<)\d+$/.test(part)) {
+            const op = part.match(/(>=|<=|>|<)/)[0];
+            const val = parseInt(part.replace(/height(>=|<=|>|<)/, ''));
+            filters.height = { op, val };
+        }
+
+        else {
+            include.push(part);
+        }
+    }
+
+    return { include, exclude, filters };
+}
+
+// Filter helper
+function check(val, filter) {
+    if (!filter) return true;
+
+    switch (filter.op) {
+        case '>': return val > filter.val;
+        case '<': return val < filter.val;
+        case '>=': return val >= filter.val;
+        case '<=': return val <= filter.val;
+    }
+}
+
+// Command handler
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
+
+    // SEARCH COMMAND
+    if (interaction.isChatInputCommand()) {
+        const userQuery = interaction.options.getString('query');
+
+        const { include, exclude, filters } = parseQuery(userQuery);
+
+        const tagString = [
+            ...include,
+            ...exclude.map(t => `-${t}`)
+        ].join('+');
+
+        await interaction.reply('Searching... 🔎');
 
         try {
-            const res = await axios.get(url, {
-                headers: { 'User-Agent': 'DiscordBot (by YOUR_USERNAME)' }
-            });
+            const res = await axios.get(
+                `https://e621.net/posts.json?tags=${tagString}&limit=100`,
+                {
+                    headers: {
+                        'User-Agent': 'FuzzBot/1.0 (by Fuzz)'
+                    }
+                }
+            );
 
-            const $ = cheerio.load(res.data);
+            let posts = res.data.posts;
 
-            // grab all posts
-            const posts = $('article').map((i, el) => {
-                return {
-                    image: $(el).attr('data-sample-url'),
-                    tags: $(el).attr('data-tags').split(' ')
-                };
-            }).get();
+            // apply filters
+            posts = posts.filter(p =>
+                check(p.score.total, filters.score) &&
+                check(p.fav_count, filters.fav) &&
+                check(p.file.width, filters.width) &&
+                check(p.file.height, filters.height)
+            );
 
-            if (posts.length === 0) {
-                return interaction.editReply('-# But nobody came...');
+            if (!posts.length) {
+                return interaction.editReply('No matching posts 😭');
             }
 
-            // pick a random post
-            const post = posts[Math.floor(Math.random() * posts.length)];
+            let index = 0;
 
-            // format tags
-            const formattedTags = post.tags.map(tag => 
-                includeTags.includes(tag) ? `**${tag}**` : tag
-            ).join(', ');
+            const buildMessage = () => {
+                const p = posts[index];
 
-            await interaction.editReply({
-                content: `Result for: ${userQuery}\n${post.image}\n-# ${formattedTags}`
-            });
+                const tags = p.tags.general.map(tag =>
+                    include.includes(tag) ? `**${tag}**` : tag
+                ).slice(0, 20).join(', ');
+
+                return {
+                    content:
+`Result for: ${userQuery}
+${p.sample.url}
+-# ${tags}
+-# Score: ${p.score.total} | Favorites: ${p.fav_count}
+-# ${p.file.width}x${p.file.height}`,
+                    components: [
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId('prev')
+                                .setLabel('⮜⬩')
+                                .setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder()
+                                .setCustomId('next')
+                                .setLabel('⬩⮞')
+                                .setStyle(ButtonStyle.Primary)
+                        )
+                    ]
+                };
+            };
+
+            await interaction.editReply(buildMessage());
+
+            // store session
+            interaction.client.sessions ??= {};
+            interaction.client.sessions[interaction.id] = {
+                posts,
+                index,
+                include,
+                userQuery
+            };
 
         } catch (err) {
             console.error(err);
-            await interaction.editReply('Something broke lmfao');
+            interaction.editReply('Something broke 💀');
         }
+    }
+
+    // BUTTON HANDLER
+    if (interaction.isButton()) {
+        const session = interaction.client.sessions?.[interaction.message.interaction.id];
+        if (!session) return;
+
+        if (interaction.customId === 'next') {
+            session.index = (session.index + 1) % session.posts.length;
+        } else {
+            session.index = (session.index - 1 + session.posts.length) % session.posts.length;
+        }
+
+        const p = session.posts[session.index];
+
+        const tags = p.tags.general.map(tag =>
+            session.include.includes(tag) ? `**${tag}**` : tag
+        ).slice(0, 20).join(', ');
+
+        await interaction.update({
+            content:
+`Result for: ${session.userQuery}
+${p.sample.url}
+-# ${tags}
+-# Score: ${p.score.total} | Favorites: ${p.fav_count}
+-# ${p.file.width}x${p.file.height}`
+        });
     }
 });
 
-// ----------------------------
-// Login
-// ----------------------------
 client.login(TOKEN);
