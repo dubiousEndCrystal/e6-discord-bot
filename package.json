@@ -1,18 +1,16 @@
 {
   "name": "e6scraper",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "description": "e621 search bot",
+  "main": "bot.js",
   "type": "commonjs",
+  "scripts": {
+    "start": "node bot.js"
+  },
   "dependencies": {
     "axios": "^1.14.0",
     "cheerio": "^1.2.0",
-    "discord.js": "^14.26.2"
+    "discord.js": "^14.26.2",
+    "express": "^4.18.2"
   }
 }
