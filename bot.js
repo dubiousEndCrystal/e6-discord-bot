@@ -1,4 +1,5 @@
 // bot.js
+require('./server.js');
 const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, REST } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
