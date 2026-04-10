@@ -1,8 +1,16 @@
 const express = require('express');
 const app = express();
 
-app.get('/', (req, res) => res.send('Bot is alive!'));
+const PORT = process.env.PORT || 3000;
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on port ${port}`));
+// health check route
+app.get('/', (req, res) => {
+    res.send('Bot is alive!');
+});
+
+app.listen(PORT, () => {
+    console.log(`Web server running on port ${PORT}`);
+});
+
+// start bot AFTER server is up
 require('./bot.js');
