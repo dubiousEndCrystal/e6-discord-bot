@@ -15,9 +15,15 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-// --------------------
-// Safety filters
-// --------------------
+// ----------------------
+// safety crash logs
+// ----------------------
+process.on('unhandledRejection', console.error);
+process.on('uncaughtException', console.error);
+
+// ----------------------
+// excluded tags
+// ----------------------
 const DEFAULT_EXCLUDES = [
     'baby','babies','diaper','loli','shota','cub','minor','underage',
     'child','preteen','infant','kid','juvenile','schoolgirl','schoolboy',
@@ -25,16 +31,16 @@ const DEFAULT_EXCLUDES = [
     'ai','generated','synthetic'
 ];
 
-// --------------------
-// Slash command register
-// --------------------
+// ----------------------
+// register slash command
+// ----------------------
 const commands = [
     new SlashCommandBuilder()
         .setName('search')
-        .setDescription('Search e621 posts')
+        .setDescription('Search e621 images')
         .addStringOption(opt =>
             opt.setName('query')
-                .setDescription('tags + filters')
+                .setDescription('tags, -exclude tags supported')
                 .setRequired(true)
         )
 ].map(c => c.toJSON());
@@ -43,87 +49,94 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
     try {
-        await rest.put(Routes.applicationCommands(CLIENT_ID), {
-            body: commands
-        });
-        console.log("Slash command registered");
+        console.log("Registering slash command...");
+        await rest.put(
+            Routes.applicationCommands(CLIENT_ID),
+            { body: commands }
+        );
+        console.log("Slash command registered!");
     } catch (err) {
         console.error(err);
     }
 })();
 
-// --------------------
-// Ready
-// --------------------
+// ----------------------
+// ready event
+// ----------------------
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 });
 
-// --------------------
-// Helper: parse query
-// --------------------
-function parse(query) {
-    const parts = query.split(/\s+/);
+// ----------------------
+// parse tags
+// ----------------------
+function buildQuery(input) {
+    const parts = input.split(/\s+/);
 
     let include = [];
     let exclude = [...DEFAULT_EXCLUDES];
 
     for (const p of parts) {
-        if (p.startsWith('-')) exclude.push(p.slice(1));
-        else include.push(p);
+        if (p.startsWith('-')) {
+            exclude.push(p.slice(1));
+        } else {
+            include.push(p);
+        }
     }
 
-    return {
-        tags: [...include, ...exclude.map(t => `-${t}`)].join('+')
-    };
+    return [...include, ...exclude.map(t => `-${t}`)].join('+');
 }
 
-// --------------------
-// Command handler
-// --------------------
+// ----------------------
+// command handler
+// ----------------------
 client.on('interactionCreate', async (i) => {
     if (!i.isChatInputCommand()) return;
 
     if (i.commandName === 'search') {
-        const query = i.options.getString('query');
-
-        await i.reply("Searching... 🔎");
-
         try {
-            const { tags } = parse(query);
+            await i.deferReply(); // IMPORTANT FIX
 
-            const res = await axios.get(
-                `https://e621.net/posts.json?tags=${tags}&limit=50`,
-                {
-                    headers: {
-                        'User-Agent': 'FuzzBot/1.0 (by Fuzz)'
-                    },
-                    timeout: 10000
-                }
-            );
+            const query = i.options.getString('query');
+
+            const tagQuery = buildQuery(query);
+
+            const url = `https://e621.net/posts.json?tags=${encodeURIComponent(tagQuery)}&limit=50`;
+
+            const res = await axios.get(url, {
+                headers: {
+                    'User-Agent': 'FuzzBot/1.0 (by Fuzz)'
+                },
+                timeout: 10000
+            });
 
             const posts = res.data.posts;
 
-            if (!posts.length) {
+            if (!posts || posts.length === 0) {
                 return i.editReply("No results 😭");
             }
 
             const post = posts[Math.floor(Math.random() * posts.length)];
 
-            const tagList = post.tags.general.slice(0, 15).join(', ');
+            const tags = post.tags.general.slice(0, 15).join(', ');
 
             await i.editReply(
 `Result for: ${query}
+
 ${post.sample.url}
 
--# ${tagList}
+-# ${tags}
 -# Score: ${post.score.total} | ❤️ ${post.fav_count}
 -# ${post.file.width}x${post.file.height}`
             );
 
         } catch (err) {
             console.error(err);
-            i.editReply("Error fetching posts 💀");
+            if (i.deferred || i.replied) {
+                i.editReply("Something broke 💀");
+            } else {
+                i.reply("Something broke 💀");
+            }
         }
     }
 });
