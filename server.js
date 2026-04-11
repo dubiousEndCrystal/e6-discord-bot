@@ -8,8 +8,8 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Web server running on port ${PORT}`);
-});
+    console.log("Web server running on port " + PORT);
 
-// start discord bot AFTER server starts
-require('./bot.js');
+    // START BOT HERE (AFTER SERVER IS UP)
+    require('./bot.js');
+});
