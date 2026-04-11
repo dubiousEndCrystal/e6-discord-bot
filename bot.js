@@ -15,15 +15,15 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-// ----------------------
-// safety crash logs
-// ----------------------
+// --------------------
+// crash protection
+// --------------------
 process.on('unhandledRejection', console.error);
 process.on('uncaughtException', console.error);
 
-// ----------------------
-// excluded tags
-// ----------------------
+// --------------------
+// filters
+// --------------------
 const DEFAULT_EXCLUDES = [
     'baby','babies','diaper','loli','shota','cub','minor','underage',
     'child','preteen','infant','kid','juvenile','schoolgirl','schoolboy',
@@ -31,16 +31,16 @@ const DEFAULT_EXCLUDES = [
     'ai','generated','synthetic'
 ];
 
-// ----------------------
-// register slash command
-// ----------------------
+// --------------------
+// slash command
+// --------------------
 const commands = [
     new SlashCommandBuilder()
         .setName('search')
-        .setDescription('Search e621 images')
+        .setDescription('Search e621 posts')
         .addStringOption(opt =>
             opt.setName('query')
-                .setDescription('tags, -exclude tags supported')
+                .setDescription('tags (-exclude supported)')
                 .setRequired(true)
         )
 ].map(c => c.toJSON());
@@ -60,16 +60,16 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
     }
 })();
 
-// ----------------------
-// ready event
-// ----------------------
+// --------------------
+// ready
+// --------------------
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 });
 
-// ----------------------
-// parse tags
-// ----------------------
+// --------------------
+// query builder
+// --------------------
 function buildQuery(input) {
     const parts = input.split(/\s+/);
 
@@ -87,57 +87,70 @@ function buildQuery(input) {
     return [...include, ...exclude.map(t => `-${t}`)].join('+');
 }
 
-// ----------------------
-// command handler
-// ----------------------
+// --------------------
+// interaction handler (FIXED)
+// --------------------
 client.on('interactionCreate', async (i) => {
     if (!i.isChatInputCommand()) return;
+    if (i.commandName !== 'search') return;
 
-    if (i.commandName === 'search') {
+    try {
+        console.log("COMMAND RECEIVED");
+
+        await i.deferReply(); // CRITICAL FIX
+
+        const query = i.options.getString('query');
+
+        const tags = buildQuery(query);
+
+        console.log("FETCH:", tags);
+
+        let res;
         try {
-            await i.deferReply(); // IMPORTANT FIX
+            res = await axios.get(
+                `https://e621.net/posts.json?tags=${encodeURIComponent(tags)}&limit=50`,
+                {
+                    headers: {
+                        'User-Agent': 'FuzzBot/1.0 (by Fuzz)'
+                    },
+                    timeout: 15000
+                }
+            );
+        } catch (err) {
+            console.log("API ERROR:", err.message);
+            return i.editReply("e621 request failed 💀");
+        }
 
-            const query = i.options.getString('query');
+        const posts = res.data.posts;
 
-            const tagQuery = buildQuery(query);
+        if (!posts || posts.length === 0) {
+            return i.editReply("No results 😭");
+        }
 
-            const url = `https://e621.net/posts.json?tags=${encodeURIComponent(tagQuery)}&limit=50`;
+        const post = posts[Math.floor(Math.random() * posts.length)];
 
-            const res = await axios.get(url, {
-                headers: {
-                    'User-Agent': 'FuzzBot/1.0 (by Fuzz)'
-                },
-                timeout: 10000
-            });
+        const tagsOut = post.tags.general.slice(0, 15).join(', ');
 
-            const posts = res.data.posts;
-
-            if (!posts || posts.length === 0) {
-                return i.editReply("No results 😭");
-            }
-
-            const post = posts[Math.floor(Math.random() * posts.length)];
-
-            const tags = post.tags.general.slice(0, 15).join(', ');
-
-            await i.editReply(
+        await i.editReply(
 `Result for: ${query}
 
 ${post.sample.url}
 
--# ${tags}
+-# ${tagsOut}
 -# Score: ${post.score.total} | ❤️ ${post.fav_count}
 -# ${post.file.width}x${post.file.height}`
-            );
+        );
 
-        } catch (err) {
-            console.error(err);
-            if (i.deferred || i.replied) {
-                i.editReply("Something broke 💀");
+    } catch (err) {
+        console.error("FATAL:", err);
+
+        try {
+            if (i.deferred) {
+                await i.editReply("bot error 💀");
             } else {
-                i.reply("Something broke 💀");
+                await i.reply("bot error 💀");
             }
-        }
+        } catch {}
     }
 });
 
